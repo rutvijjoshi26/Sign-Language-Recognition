@@ -1,30 +1,41 @@
 {
-  "name": "yolov5-tfjs",
-  "description": "Object detection application right in your browser using YOLOv5 and Tensorflow.js",
+  "name": "multilingual-sign-language-detection",
+  "description": "English and Hindi hand sign detection in the browser with YOLOv5 and TensorFlow.js",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "start": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test \"test/*.test.js\"",
+    "test:landmark": "node --test src/landmark/features.test.js src/landmark/segmenter.test.js src/landmark/glosses.test.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Hyuto/yolov5-tfjs.git"
+    "url": "git+https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5.git"
   },
   "keywords": [
+    "sign language",
     "object detection",
     "yolov5",
-    "javascript",
+    "accessibility",
     "react",
     "tensorflow.js"
   ],
-  "author": "Wahyu Setianto",
+  "author": "Rutvij Joshi",
+  "contributors": [
+    {
+      "name": "Wahyu Setianto",
+      "url": "https://github.com/Hyuto"
+    }
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Hyuto/yolov5-tfjs/issues"
+    "url": "https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5/issues"
   },
-  "homepage": "https://github.com/Hyuto/yolov5-tfjs#readme",
+  "homepage": "https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5#readme",
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.2",
     "@tensorflow/tfjs": "^4.1.0",
     "normalize.css": "^8.0.1",
     "react": "^18.2.0",

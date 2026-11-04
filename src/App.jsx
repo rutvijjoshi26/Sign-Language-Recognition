@@ -1,362 +1,332 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import * as tf from "@tensorflow/tfjs";
 import "@tensorflow/tfjs-backend-webgl"; // set backend to webgl
 import Loader from "./components/loader";
 import ButtonHandler from "./components/btn-handler";
 import "./style/App.css";
-import labelsEnglish from "../src/utils/labelsEnglish.json";
-import labelsHindi from "../src/utils/labelsHindi.json";
+import labelsEnglish from "./utils/labelsEnglish.json";
+import labelsHindi from "./utils/labelsHindi.json";
+import { loadModel, detectFrame, renderDetections, clearCanvas } from "./utils/detect";
+import { describeDetections, modelUrl } from "./utils/detections";
+import { openCamera, closeCamera } from "./utils/webcam";
+import { createSmoother } from "./utils/smoothing";
+import { createTranscript } from "./utils/transcript";
 
-
-//renderBox.js
-/**
- * Render prediction boxes
- * @param {HTMLCanvasElement} canvasRef canvas tag reference
- * @param {number} classThreshold class threshold
- * @param {Array} boxes_data boxes array
- * @param {Array} scores_data scores array
- * @param {Array} classes_data class array
- * @param {Array[Number]} ratios boxes ratio [xRatio, yRatio]
- */
-
-
-const renderBoxes = (
-  canvasRef,
-  classThreshold,
-  boxes_data,
-  scores_data,
-  classes_data,
-  ratios, modelName
-) => {
-
-  const ctx = canvasRef.getContext("2d");
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height); // clean canvas
-  
-
-  const colors = new Colors();
-  var boundingLabels;
-    if (modelName==="hindi") {
-      boundingLabels = labelsHindi;
-  } else {
-      boundingLabels = labelsEnglish;
-  }
-
-  
-  // font configs
-  const font = `${Math.max(
-    Math.round(Math.max(ctx.canvas.width, ctx.canvas.height) / 40),
-    14
-  )}px Arial`;
-  ctx.font = font;
-  ctx.textBaseline = "top";
-
-  for (let i = 0; i < scores_data.length; ++i) {
-    // filter based on class threshold
-    if (scores_data[i] > classThreshold) {
-      const klass = boundingLabels[classes_data[i]];
-      const color = colors.get(classes_data[i]);
-      const score = (scores_data[i] * 100).toFixed(1);
-
-      let [x1, y1, x2, y2] = boxes_data.slice(i * 4, (i + 1) * 4);
-      x1 *= canvasRef.width * ratios[0];
-      x2 *= canvasRef.width * ratios[0];
-      y1 *= canvasRef.height * ratios[1];
-      y2 *= canvasRef.height * ratios[1];
-      const width = x2 - x1;
-      const height = y2 - y1;
-
-      // draw box.
-      ctx.fillStyle = Colors.hexToRgba(color, 0.2);
-      ctx.fillRect(x1, y1, width, height);
-      // draw border box.
-      ctx.strokeStyle = color;
-      ctx.lineWidth = Math.max(Math.min(ctx.canvas.width, ctx.canvas.height) / 200, 2.5);
-      ctx.strokeRect(x1, y1, width, height);
-
-      // Draw the label background.
-      ctx.fillStyle = color;
-      const textWidth = ctx.measureText(klass + " - " + score + "%").width;
-      const textHeight = parseInt(font, 10); // base 10
-      const yText = y1 - (textHeight + ctx.lineWidth);
-      ctx.fillRect(
-        x1 - 1,
-        yText < 0 ? 0 : yText, // handle overflow label box
-        textWidth + ctx.lineWidth,
-        textHeight + ctx.lineWidth
-      );
-
-      // Draw labels
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(klass + " - " + score + "%", x1 - 1, yText < 0 ? 0 : yText);
-    }
-  }
+// Both languages share one network: public/hindi_web_model is a second export of the same weights
+// (same topology, tensors equal to within 2.4e-7), so switching language only swaps the label list.
+const MODEL_NAME = "english";
+const LANGUAGES = {
+  english: { name: "English", labels: labelsEnglish, speechLang: "en-US", htmlLang: "en" },
+  hindi: { name: "Hindi", labels: labelsHindi, speechLang: "hi-IN", htmlLang: "hi" },
 };
 
-class Colors {
-  // ultralytics color palette https://ultralytics.com/
-  constructor() {
-    this.palette = [
-      "#FF3838",
-      "#FF9D97",
-      "#FF701F",
-      "#FFB21D",
-      "#CFD231",
-      "#48F90A",
-      "#92CC17",
-      "#3DDB86",
-      "#1A9334",
-      "#00D4BB",
-      "#2C99A8",
-      "#00C2FF",
-      "#344593",
-      "#6473FF",
-      "#0018EC",
-      "#8438FF",
-      "#520085",
-      "#CB38FF",
-      "#FF95C8",
-      "#FF37C7",
-    ];
-    this.n = this.palette.length;
-  }
+// Boxes are drawn for every detection above DRAW_THRESHOLD (the original class threshold).
+// Only predictions above SIGN_THRESHOLD count as votes, and a sign enters the transcript after
+// it wins SMOOTHING.enter of the last SMOOTHING.window frames (released below SMOOTHING.exit).
+const DRAW_THRESHOLD = 0.2;
+const SIGN_THRESHOLD = 0.5;
+const SMOOTHING = { window: 8, enter: 5, exit: 3 };
 
-  get = (i) => this.palette[Math.floor(i) % this.n];
-
-  static hexToRgba = (hex, alpha) => {
-    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result
-      ? `rgba(${[parseInt(result[1], 16), parseInt(result[2], 16), parseInt(result[3], 16)].join(
-          ", "
-        )}, ${alpha})`
-      : null;
-  };
-}
-
-
-/**
- * Preprocess image / frame before forwarded into the model
- * @param {HTMLVideoElement|HTMLImageElement} source
- * @param {Number} modelWidth
- * @param {Number} modelHeight
- * @returns input tensor, xRatio and yRatio
- */
-const preprocess = (source, modelWidth, modelHeight) => {
-  let xRatio, yRatio; // ratios for boxes
-
-  const input = tf.tidy(() => {
-    const img = tf.browser.fromPixels(source);
-
-    // padding image to square => [n, m] to [n, n], n > m
-    const [h, w] = img.shape.slice(0, 2); // get source width and height
-    const maxSize = Math.max(w, h); // get max size
-    const imgPadded = img.pad([
-      [0, maxSize - h], // padding y [bottom only]
-      [0, maxSize - w], // padding x [right only]
-      [0, 0],
-    ]);
-
-    xRatio = maxSize / w; // update xRatio
-    yRatio = maxSize / h; // update yRatio
-
-    return tf.image
-      .resizeBilinear(imgPadded, [modelWidth, modelHeight]) // resize frame
-      .div(255.0) // normalize
-      .expandDims(0); // add batch
-  });
-
-  return [input, xRatio, yRatio];
-};
-
-/**
- * Function to detect image.
- * @param {HTMLImageElement} imgSource image source
- * @param {tf.GraphModel} model loaded YOLOv5 tensorflow.js model
- * @param {Number} classThreshold class threshold
- * @param {HTMLCanvasElement} canvasRef canvas reference
- */
-const detectImage = async (imgSource, model, classThreshold, canvasRef, modelName) => {
-  const [modelWidth, modelHeight] = model.inputShape.slice(1, 3); // get model width and height
-
-  tf.engine().startScope(); // start scoping tf engine
-  const [input, xRatio, yRatio] = preprocess(imgSource, modelWidth, modelHeight);
-
-  await model.net.executeAsync(input).then((res) => {
-    const [boxes, scores, classes] = res.slice(0, 3);
-    const boxes_data = boxes.dataSync();
-    const scores_data = scores.dataSync();
-    const classes_data = classes.dataSync();
-    renderBoxes(canvasRef, classThreshold, boxes_data, scores_data, classes_data, [xRatio, yRatio], modelName); // render boxes
-    tf.dispose(res); // clear memory
-  });
-
-  tf.engine().endScope(); // end of scoping
-};
-
-/**
- * Function to detect video from every source.
- * @param {HTMLVideoElement} vidSource video source
- * @param {tf.GraphModel} model loaded YOLOv5 tensorflow.js model
- * @param {Number} classThreshold class threshold
- * @param {HTMLCanvasElement} canvasRef canvas reference
- */
-const detectVideo = (vidSource, model, classThreshold, canvasRef, modelName) => {
-  const [modelWidth, modelHeight] = model.inputShape.slice(1, 3); // get model width and height
-
-  /**
-   * Function to detect every frame from video
-   */
-//   const detectFrame = async () => {
-//     if (vidSource.videoWidth === 0 && vidSource.srcObject === null) {
-//       const ctx = canvasRef.getContext("2d");
-//       ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height); // clean canvas
-//       return; // handle if source is closed
-//     }
-
-//     tf.engine().startScope(); // start scoping tf engine
-//     const [input, xRatio, yRatio] = preprocess(vidSource, modelWidth, modelHeight);
-
-//     await model.net.executeAsync(input).then((res) => {
-//       const [boxes, scores, classes] = res.slice(0, 3);
-//       const boxes_data = boxes.dataSync();
-//       const scores_data = scores.dataSync();
-//       const classes_data = classes.dataSync();
-//       // console.log(classes_data)
-//       renderBoxes(canvasRef, classThreshold, boxes_data, scores_data, classes_data, [
-//         xRatio,
-//         yRatio, modelName
-//       ]); // render boxes
-//       tf.dispose(res); // clear memory
-//     });
-
-//     requestAnimationFrame(detectFrame); // get another frame
-//     tf.engine().endScope(); // end of scoping
-//   };
-
-//   detectFrame(); // initialize to detect every frame
-// };
-  const detectFrame = async ()=>{
-    if(vidSource.videoWidth === 0 || vidSource.srcObject===null){
-      const ctx=canvasRef.getContext('2d')
-      ctx.clearRect(0,0,canvasRef.width,canvasRef.height)
-      requestAnimationFrame(detectFrame)
-      return
-    }
-    tf.engine().startScope()
-    const [input,xRatio,yRatio]=preprocess(vidSource,modelWidth,modelHeight)
-    const res=await model.net.executeAsync(input)
-    const [boxes,scores,classes]=res.slice(0,3)
-    const boxesData=await boxes.data()
-    const scoresData=await scores.data()
-    const classesData=await classes.data()
-
-    renderBoxes(canvasRef,classThreshold,boxesData,scoresData,classesData,[
-      xRatio,
-      yRatio
-    ],modelName);
-    tf.dispose([res,boxes,scores,classes])
-    requestAnimationFrame(detectFrame)
-  }
-  detectFrame()
-}
-
-
-
+const speechSupported = typeof window !== "undefined" && "speechSynthesis" in window;
 
 const App = () => {
-  // const [isClicked, setIsCliked] = useState(false);
-  const [loading, setLoading] = useState({ loading: true, progress: 0 }); // loading state
-  const [model, setModel] = useState({
-    net: null,
-    inputShape: [1, 0, 0, 3],
-  }); // init model & input shape
+  const [loading, setLoading] = useState({ loading: true, progress: 0 });
+  const [inputShape, setInputShape] = useState([1, 640, 640, 3]);
+  const [language, setLanguage] = useState("english");
+  const [source, setSource] = useState(null); // null | "image" | "video" | "camera"
+  const [facingMode, setFacingMode] = useState("user");
+  const [error, setError] = useState("");
+  const [current, setCurrent] = useState(null); // { label, confidence } shown as text
+  const [imageResult, setImageResult] = useState("");
+  const [transcriptItems, setTranscriptItems] = useState([]);
+  const [speak, setSpeak] = useState(false);
 
-  // references
   const imageRef = useRef(null);
-  const cameraRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const netRef = useRef(null);
+  const loopGen = useRef(0);
+  const objectUrl = useRef(null);
+  const smoother = useRef(createSmoother(SMOOTHING));
+  const transcript = useRef(createTranscript());
+  const langRef = useRef(LANGUAGES.english);
+  const speakRef = useRef(false);
+  const langByTime = useRef(new Map()); // transcript entry time -> lang attribute
 
-  // model configs
-  const  [modelName, setModelName] = useState("english");
-  const classThreshold = 0.2;
+  langRef.current = LANGUAGES[language];
+  speakRef.current = speak;
 
-  const handleChange = (event) => {
+  // load the model once
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await tf.ready();
+        const net = await loadModel(modelUrl(import.meta.env.BASE_URL, MODEL_NAME), (fraction) => {
+          if (!cancelled) setLoading({ loading: true, progress: fraction });
+        });
+        if (cancelled) {
+          net.dispose();
+          return;
+        }
+        netRef.current = net;
+        setInputShape(net.inputs[0].shape);
+        setLoading({ loading: false, progress: 1 });
+      } catch (err) {
+        if (cancelled) return;
+        setLoading({ loading: false, progress: 0 });
+        setError(`The sign detection model could not be loaded (${err.message}). Check your connection and reload the page.`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (netRef.current) netRef.current.dispose();
+      netRef.current = null;
+    };
+  }, []);
 
-    setModelName(event.target.value);
- 
+  // switching language relabels results; the running stream keeps going
+  useEffect(() => {
+    smoother.current.reset();
+    setCurrent(null);
+    if (imageRef.current && !imageRef.current.hidden && imageRef.current.complete) runImage(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
+
+  const addToTranscript = useCallback((label) => {
+    const t = performance.now();
+    if (!transcript.current.add(label, t)) return;
+    langByTime.current.set(t, langRef.current.htmlLang);
+    setTranscriptItems(transcript.current.items());
+    if (speakRef.current && speechSupported) {
+      const u = new SpeechSynthesisUtterance(label);
+      u.lang = langRef.current.speechLang;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    }
+  }, []);
+
+  const handleFrame = useCallback(
+    (detections) => {
+      const top = detections[0];
+      const vote = top && top.score >= SIGN_THRESHOLD ? { label: langRef.current.labels[top.classId], score: top.score } : null;
+      const r = smoother.current.push(vote);
+      const next = r.stable ? { label: r.stable, confidence: Math.round(r.confidence * 100) } : null;
+      setCurrent((prev) =>
+        prev === next || (prev && next && prev.label === next.label && prev.confidence === next.confidence) ? prev : next
+      );
+      if (r.entered) addToTranscript(r.entered);
+    },
+    [addToTranscript]
+  );
+
+  // record=false re-labels the current image without adding it to the transcript again
+  const runImage = async (record = true) => {
+    const net = netRef.current;
+    const img = imageRef.current;
+    if (!net || !img || img.hidden || !img.naturalWidth) return;
+    try {
+      const { detections, ratios } = await detectFrame(net, img, DRAW_THRESHOLD);
+      renderDetections(canvasRef.current, detections, ratios, langRef.current.labels);
+      setImageResult(describeDetections(detections, langRef.current.labels));
+      const top = detections[0];
+      if (record && top && top.score >= SIGN_THRESHOLD) addToTranscript(langRef.current.labels[top.classId]);
+    } catch (err) {
+      setError(`Detection failed: ${err.message}`);
+    }
   };
 
-  useEffect(() => {
-    tf.ready().then(async () => {
-      const yolov5 = await tf.loadGraphModel(
-        `${window.location.origin}/${modelName}_web_model/model.json`,
-        {
-          onProgress: (fractions) => {
-            setLoading({ loading: true, progress: fractions }); // set loading fractions
-          },
+  // one loop per play event; bumping loopGen stops it
+  const runVideo = () => {
+    const videoEl = videoRef.current;
+    const gen = ++loopGen.current;
+    smoother.current.reset();
+    const step = async () => {
+      if (gen !== loopGen.current || videoEl.paused || videoEl.ended) return;
+      const net = netRef.current;
+      if (net && videoEl.readyState >= 2 && videoEl.videoWidth > 0) {
+        try {
+          const { detections, ratios } = await detectFrame(net, videoEl, DRAW_THRESHOLD);
+          if (gen !== loopGen.current) return;
+          renderDetections(canvasRef.current, detections, ratios, langRef.current.labels);
+          handleFrame(detections);
+        } catch (err) {
+          if (gen === loopGen.current) setError(`Detection failed: ${err.message}`);
+          return;
         }
-      ); // load model
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
 
-      // warming up model
-      const dummyInput = tf.ones(yolov5.inputs[0].shape);
-      const warmupResult = await yolov5.executeAsync(dummyInput);
-      tf.dispose(warmupResult); // cleanup memory
-      tf.dispose(dummyInput); // cleanup memory
+  const stopLoop = () => {
+    loopGen.current++;
+  };
 
-      setLoading({ loading: false, progress: 1 });
-      setModel({
-        net: yolov5,
-        inputShape: yolov5.inputs[0].shape,
-      }); // set model & input shape
-    });
-  }, [modelName]);
+  const closeSource = () => {
+    stopLoop();
+    const video = videoRef.current;
+    closeCamera(video);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.hidden = true;
+    imageRef.current.removeAttribute("src");
+    imageRef.current.hidden = true;
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+    objectUrl.current = null;
+    clearCanvas(canvasRef.current);
+    smoother.current.reset();
+    setCurrent(null);
+    setImageResult("");
+    setSource(null);
+  };
+
+  const openImage = (file) => {
+    closeSource();
+    setError("");
+    objectUrl.current = URL.createObjectURL(file);
+    imageRef.current.hidden = false;
+    imageRef.current.src = objectUrl.current;
+    setSource("image");
+  };
+
+  const openVideo = (file) => {
+    closeSource();
+    setError("");
+    objectUrl.current = URL.createObjectURL(file);
+    videoRef.current.hidden = false;
+    videoRef.current.src = objectUrl.current;
+    setSource("video");
+  };
+
+  const startCamera = async (mode) => {
+    closeSource();
+    setError("");
+    try {
+      await openCamera(videoRef.current, mode);
+      videoRef.current.hidden = false;
+      setSource("camera");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const toggleCamera = () => (source === "camera" ? closeSource() : startCamera(facingMode));
+
+  const changeFacingMode = (mode) => {
+    setFacingMode(mode);
+    if (source === "camera") startCamera(mode);
+  };
+
+  const clearTranscript = () => {
+    transcript.current.clear();
+    langByTime.current.clear();
+    setTranscriptItems([]);
+  };
+
+  const lang = LANGUAGES[language];
 
   return (
     <div className="App">
-      {loading.loading && <Loader>Loading... {(loading.progress * 100).toFixed(2)}%</Loader>}
-      <div className="header">
-        <h1>📷 Multilingual Sign Language Detection</h1>
-        <p>
-          Multilingual Sign Language Detection using YOLOv5 Algorithm</p>
-        <p>
-          Language : <code className="code">{modelName}</code>
-        </p>
-      </div>
+      {loading.loading && <Loader progress={loading.progress} />}
+      <header className="header">
+        <h1>
+          <span aria-hidden="true">📷 </span>Multilingual Sign Language Detection
+        </h1>
+        <p>Detects hand signs in images, videos or your camera with YOLOv5, entirely in your browser.</p>
+      </header>
 
-      <div className="content">
-        <img
-          src="#"
-          ref={imageRef}
-          onLoad={() => detectImage(imageRef.current, model, classThreshold, canvasRef.current, modelName)}
+      <main className="main">
+        <div className="toolbar">
+          <label className="inline-field">
+            Language
+            <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+              {Object.entries(LANGUAGES).map(([key, l]) => (
+                <option key={key} value={key}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <ButtonHandler
+          source={source}
+          disabled={loading.loading}
+          facingMode={facingMode}
+          onFacingModeChange={changeFacingMode}
+          onOpenImage={openImage}
+          onOpenVideo={openVideo}
+          onToggleCamera={toggleCamera}
+          onClose={closeSource}
         />
-        <video
-          autoPlay
-          muted
-          ref={cameraRef}
-          onPlay={() => detectVideo(cameraRef.current, model, classThreshold, canvasRef.current, modelName)}
-        />
-        <video
-          autoPlay
-          muted
-          ref={videoRef}
-          onPlay={() => detectVideo(videoRef.current, model, classThreshold, canvasRef.current, modelName)}
-        />
-        <canvas width={model.inputShape[1]} height={model.inputShape[2]} ref={canvasRef} />
-      </div>
 
-      <ButtonHandler imageRef={imageRef} cameraRef={cameraRef} videoRef={videoRef} />
-      <label>
+        <div className="error" role="alert">
+          {error && (
+            <>
+              <p>{error}</p>
+              <button type="button" className="secondary" onClick={() => setError("")}>
+                Dismiss
+              </button>
+            </>
+          )}
+        </div>
 
-      Select Language
-       <select value={modelName} onChange={handleChange}>
+        <div className="content">
+          <img hidden ref={imageRef} alt="Uploaded image being checked for signs" onLoad={() => runImage(true)} />
+          <video
+            hidden
+            autoPlay
+            muted
+            playsInline
+            controls={source === "video"}
+            ref={videoRef}
+            aria-label={source === "camera" ? "Camera preview" : "Uploaded video"}
+            onPlay={runVideo}
+            onPause={stopLoop}
+            onEnded={stopLoop}
+          />
+          <canvas width={inputShape[1]} height={inputShape[2]} ref={canvasRef} aria-hidden="true" />
+        </div>
 
-         <option value="english">English</option>
-
-         <option value="hindi">Hindi</option>
-
-       </select>
-
-     </label>
+        <section className="results" aria-labelledby="results-heading">
+          <h2 id="results-heading">Recognized signs</h2>
+          <p className="current">
+            {source === "image" ? (
+              <>Detected: <strong>{imageResult || "checking..."}</strong></>
+            ) : current ? (
+              <>
+                Current sign: <strong lang={lang.htmlLang}>{current.label}</strong>{" "}
+                <span className="confidence">({current.confidence}% confidence)</span>
+              </>
+            ) : (
+              <>Current sign: <strong>none</strong></>
+            )}
+          </p>
+          {transcriptItems.length === 0 && <p className="hint">Signs you hold steady for about a second appear here.</p>}
+          {/* role="log" announces only newly added words, so the live region never re-reads the whole list */}
+          <div role="log" aria-live="polite" aria-relevant="additions" aria-label="Transcript">
+            <ol className="transcript">
+              {transcriptItems.map((item, i) => (
+                <li key={`${item.t}-${i}`} lang={langByTime.current.get(item.t)}>
+                  {item.label}
+                </li>
+              ))}
+            </ol>
+          </div>
+          <div className="transcript-actions">
+            <button type="button" className="secondary" onClick={clearTranscript} disabled={transcriptItems.length === 0}>
+              Clear transcript
+            </button>
+            <label className="inline-field">
+              <input type="checkbox" checked={speak} disabled={!speechSupported} onChange={(e) => setSpeak(e.target.checked)} />
+              Speak signs aloud{speechSupported ? "" : " (not supported in this browser)"}
+            </label>
+          </div>
+        </section>
+      </main>
     </div>
   );
 };

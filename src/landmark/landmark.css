@@ -1,0 +1,92 @@
+.lm-root {
+  min-height: 100%;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.lm-root .header {
+  text-align: center;
+  max-width: 720px;
+}
+
+.lm-status {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.lm-stage {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+}
+
+.lm-stage video {
+  width: 100%;
+  border-radius: 10px;
+  display: block;
+}
+
+.lm-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.lm-hidden {
+  display: none !important;
+}
+
+.lm-panels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+
+.lm-caption {
+  min-width: 220px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #111;
+  color: #fff;
+  text-align: center;
+}
+
+.lm-caption.lm-unsure {
+  opacity: 0.6;
+}
+
+.lm-caption-title {
+  font-size: 0.8rem;
+  color: #bbb;
+}
+
+.lm-caption-en {
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+
+.lm-caption-hi {
+  font-size: 1.6rem;
+}
+
+.lm-caption-p,
+.lm-alts {
+  font-size: 0.85rem;
+  color: #ccc;
+  list-style: none;
+}
+
+.lm-history span + span::before {
+  content: " | ";
+}
+
+.lm-stats {
+  font-size: 0.85rem;
+  max-width: 720px;
+}
