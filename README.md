@@ -1,19 +1,19 @@
-# Multilingual Sign Language Detection using YOLOv5
+# Sign Language Recognition (English and Hindi)
 
 A browser app that detects 51 hand signs and shows them as English or Hindi words. A YOLOv5l model (about 46M parameters, 185.6 MB of weights) runs entirely on the device through TensorFlow.js, so images and camera frames never leave the browser. A second, lighter mode recognizes 50 Indian Sign Language word signs from hand and body landmarks (see [below](#indian-sign-language-recognition-from-landmarks-include-50)).
 
 ## Run it locally
 
 ```bash
-git clone https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5.git
-cd Multilingual-Sign-Language-Detection-using-YOLOv5
+git clone https://github.com/rutvijjoshi26/Sign-Language-Recognition.git
+cd Sign-Language-Recognition
 npm install        # or: yarn install
 npm start          # or: yarn start
 ```
 
 Other scripts:
 
-- `npm run build` builds a static site into `dist/`. To host it under a subpath (for example GitHub Pages), set the base path: `BASE_PATH=/Multilingual-Sign-Language-Detection-using-YOLOv5/ npm run build`. The model is loaded relative to that base.
+- `npm run build` builds a static site into `dist/`. To host it under a subpath (for example GitHub Pages), set the base path: `BASE_PATH=/Sign-Language-Recognition/ npm run build`. The model is loaded relative to that base.
 - `npm run preview` serves the production build.
 - `npm test` runs the unit tests for the smoothing, transcript and detection helpers (Node 20 or newer).
 

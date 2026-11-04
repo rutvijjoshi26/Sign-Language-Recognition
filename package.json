@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5.git"
+    "url": "git+https://github.com/rutvijjoshi26/Sign-Language-Recognition.git"
   },
   "keywords": [
     "sign language",
@@ -31,9 +31,9 @@
   ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5/issues"
+    "url": "https://github.com/rutvijjoshi26/Sign-Language-Recognition/issues"
   },
-  "homepage": "https://github.com/rutvijjoshi26/Multilingual-Sign-Language-Detection-using-YOLOv5#readme",
+  "homepage": "https://github.com/rutvijjoshi26/Sign-Language-Recognition#readme",
   "dependencies": {
     "@mediapipe/tasks-vision": "1.2.2",
     "@tensorflow/tfjs": "^4.1.0",
